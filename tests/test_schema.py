@@ -47,7 +47,8 @@ def test_schema_self_join_on(db: gp.Database, t: gp.DataFrame):
     ret: gp.DataFrame = t.join(
         t,
         on=["id"],
-        other_columns={"id": "id_1"},
+        self_columns={"id"},
+        other_columns={"id"},
     )
     assert len(list(ret)) == 10
 

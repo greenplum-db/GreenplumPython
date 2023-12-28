@@ -554,7 +554,7 @@ class DataFrame:
         other: "DataFrame",
         how: Literal["", "left", "right", "outer", "inner", "cross"] = "",
         cond: Optional[Callable[["DataFrame", "DataFrame"], Expr]] = None,
-        on: Optional[Union[str, Iterable[str]]] = None,
+        on: Iterable[str] = None,
         self_columns: Union[Dict[str, Optional[str]], Set[str]] = {"*"},
         other_columns: Union[Dict[str, Optional[str]], Set[str]] = {"*"},
     ) -> "DataFrame":
@@ -598,18 +598,18 @@ class DataFrame:
                 ...     age_rows, column_names=["name", "age"], db=db)
                 >>> result = student.join(
                 ...     student,
-                ...     on="age",
-                ...     self_columns={"*"},
-                ...     other_columns={"name": "name_2"})
+                ...     on=["age"],
+                ...     self_columns={"name": "name", "age": "age_1"},
+                ...     other_columns={"name": "name_2", "age": "age_2"})
                 >>> result
                 ----------------------
-                 name  | age | name_2
-                -------+-----+--------
-                 alice |  18 | alice
-                 bob   |  19 | carol
-                 bob   |  19 | bob
-                 carol |  19 | carol
-                 carol |  19 | bob
+                 age | name  | name_2
+                -----+-------+--------
+                  18 | alice | alice
+                  19 | bob   | carol
+                  19 | bob   | bob
+                  19 | carol | carol
+                  19 | carol | bob
                 ----------------------
                 (5 rows)
         """
@@ -652,12 +652,79 @@ class DataFrame:
         )
         # USING clause in SQL uses argument `on`.
         sql_using_clause = f"USING ({join_column_names})" if join_column_names is not None else ""
-        return DataFrame(
+
+        if on is None:
+            return DataFrame(
+                f"""
+                    SELECT {",".join(target_list)}
+                    FROM {self._name} {how} JOIN {other_clause} {sql_on_clause} {sql_using_clause}
+                """,
+                parents=[self, other],
+            )
+
+        def bind_using(
+            t: DataFrame,
+            columns: Union[Dict[str, Optional[str]], Set[str]],
+            on: Iterable[str],
+            suffix: str,
+        ) -> List[str]:
+            target_list: List[str] = []
+            for k in columns:
+                col: Column = t[k]
+                v = columns[k] if isinstance(columns, dict) else (k + suffix) if k in on else None
+                target_list.append(col._serialize() + (f' AS "{v}"' if v is not None else ""))
+            return target_list
+
+        self_target_list = (
+            bind_using(self, self_columns, on, "_l")
+            if isinstance(self_columns, set)
+            else bind(self, self_columns)
+        )
+        other_target_list = (
+            bind_using(other_temp, other_columns, on, "_r")
+            if isinstance(other_columns, set)
+            else bind(other_temp, other_columns)
+        )
+        target_list = self_target_list + other_target_list
+
+        join_dataframe = DataFrame(
             f"""
                 SELECT {",".join(target_list)}
                 FROM {self._name} {how} JOIN {other_clause} {sql_on_clause} {sql_using_clause}
             """,
             parents=[self, other],
+        )
+        coalesce_target_list = []
+        if self_columns and other_columns:
+            for k in on:
+                s_v = self_columns[k] if isinstance(self_columns, dict) else (k + "_l")
+                o_v = other_columns[k] if isinstance(other_columns, dict) else (k + "_r")
+                coalesce_target_list.append(f"COALESCE({s_v},{o_v}) AS {k}")
+
+        join_df = DataFrame(
+            f"""
+                SELECT * {("," + ",".join(coalesce_target_list)) if coalesce_target_list != [] else ""}
+                FROM {join_dataframe._name}
+            """,
+            parents=[join_dataframe],
+        )
+
+        self_columns_set = (
+            self_columns
+            if isinstance(self_columns, set)
+            else set([k if k in on else v for k, v in self_columns.items()])
+        )
+        other_columns_set = (
+            other_columns
+            if isinstance(other_columns, set)
+            else set([k if k in on else v for k, v in other_columns.items()])
+        )
+        return DataFrame(
+            f"""
+                SELECT {",".join(sorted(self_columns_set | other_columns_set))}
+                FROM {join_df._name}
+            """,
+            parents=[join_df],
         )
 
     inner_join = partialmethod(join, how="INNER")
