@@ -3,7 +3,7 @@ import dataclasses
 import pytest
 
 import greenplumpython as gp
-from greenplumpython.type import _serialize_to_type
+from greenplumpython.type import _serialize_to_type_name
 from tests import db
 
 
@@ -76,7 +76,7 @@ def test_type_create(db: gp.Database):
         _first_name: str
         _last_name: str
 
-    type_name = _serialize_to_type(Person, db=db)
+    type_name = _serialize_to_type_name(Person, db=db)
     assert isinstance(type_name, str)
 
 
@@ -88,5 +88,5 @@ def test_type_no_annotation(db: gp.Database):
             self._last_name = _last_name
 
     with pytest.raises(Exception) as exc_info:
-        _serialize_to_type(Person, db=db)
+        _serialize_to_type_name(Person, db=db)
     assert "Failed to get annotations" in str(exc_info.value)

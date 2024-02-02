@@ -94,6 +94,17 @@ class DataType:
         if self._modifier is not None:
             self._qualified_name_str += f"({self._modifier})"
 
+    def _serialize(self, db: Database) -> str:
+        if self._annotation is None:
+            raise Exception("No type annotation to serialize")
+        members = get_type_hints(self._annotation)
+        if len(members) == 0:
+            raise Exception(f"Failed to get annotations for type {self._annotation}")
+        members_str = ",\n".join(
+            [f"{name} {_serialize_to_type_name(type_t, db)}" for name, type_t in members.items()]
+        )
+        return f"({members_str})"
+
     # -- Creation of a composite type in Greenplum corresponding to the class_type given
     def _create_in_db(self, db: Database):
         # noqa: D400
@@ -115,14 +126,9 @@ class DataType:
             self._annotation, type
         ), "Only composite data types can be created in database."
         schema = "pg_temp"
-        members = get_type_hints(self._annotation)
-        if len(members) == 0:
-            raise Exception(f"Failed to get annotations for type {self._annotation}")
-        att_type_str = ",\n".join(
-            [f"{name} {_serialize_to_type(type_t, db)}" for name, type_t in members.items()]
-        )
+
         db._execute(
-            f'CREATE TYPE "{schema}"."{self._name}" AS (\n' f"{att_type_str}\n" f");",
+            f'CREATE TYPE "{schema}"."{self._name}" AS {self._serialize(db=db)};',
             has_results=False,
         )
         self._created_in_dbs.add(db)
@@ -178,7 +184,7 @@ def type_(name: str, schema: Optional[str] = None, modifier: Optional[int] = Non
     return DataType(name, schema=schema, modifier=modifier)
 
 
-def _serialize_to_type(
+def _serialize_to_type_name(
     annotation: Union[DataType, type],
     db: Database,
     for_return: bool = False,
@@ -204,10 +210,10 @@ def _serialize_to_type(
         if annotation.__origin__ == list or annotation.__origin__ == List:
             args: Tuple[type, ...] = annotation.__args__
             if for_return:
-                return f"SETOF {_serialize_to_type(args[0], db)}"  # type: ignore
-            if args[0] in _defined_types:
-                return f"{_serialize_to_type(args[0], db)}[]"  # type: ignore
-        raise NotImplementedError()
+                return f"SETOF {_serialize_to_type_name(args[0], db)}"  # type: ignore
+            else:
+                return f"{_serialize_to_type_name(args[0], db)}[]"  # type: ignore
+        raise NotImplementedError("Only list is supported as generic data type")
     else:
         if isinstance(annotation, DataType):
             return annotation._qualified_name_str
